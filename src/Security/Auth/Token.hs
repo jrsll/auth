@@ -22,34 +22,45 @@ import           Data.ByteString.Char8   as BC
 import           Data.ByteString.Char8   (pack, splitAt, unpack)
 import qualified Data.ByteString.Lazy    as LB
 import           Data.Maybe              (fromJust)
+import           GHC.Word                (Word8)
 import           Security.Auth.Principal
 import           System.Entropy          (getEntropy)
 
+-- | Contains the encrypted data from 'Principal'.
 newtype Token = Token { tokenBytes :: B.ByteString }
 
+-- | Used to encrypt/decrypt tokens.
 newtype EncryptionKey = EncryptionKey { aes128 :: AES128 }
 
+-- | Random bytes to seed individual encryptions.
 newtype InitVector = InitVector { ivBytes :: B.ByteString }
 
 blockSize = 16
 ivSize    = 16
 keySize   = 16
-padEnd    = B.pack [1]
-padWord   = 0
 
--- Add a sequence of bytes to the sequence to match the required input lengt to the encryption algorithm.
+word8ToInt :: Word8 -> Int
+word8ToInt = fromIntegral . toInteger
+
+word8FromInt :: Int -> Word8
+word8FromInt = fromInteger . toInteger
+
+-- Append bytes (PKCS7 style) to the plaintext to match the requirement regarding input lengt of the encryption algorithm.
 pad :: B.ByteString -> B.ByteString
 pad bs =
-  B.concat [padWords, padEnd, bs]
+  B.concat [bs, padWords]
   where
-      rest     = B.length bs `mod` blockSize
-      n        = 15 - rest
-      padWords = B.replicate n padWord
+      remainder = B.length bs `mod` blockSize
+      pads      = if remainder == 0 then blockSize else blockSize - remainder
+      padWord   = word8FromInt pads
+      padWords  = B.replicate pads padWord
 
 -- Undo the work of 'pad'
 unpad :: B.ByteString -> B.ByteString
 unpad bs =
-  B.tail $ B.dropWhile (== padWord) bs
+    B.take (B.length bs - pads) bs
+    where
+      pads = word8ToInt (B.last bs)
 
 mkEncryptionKey :: B.ByteString -> Either String EncryptionKey
 mkEncryptionKey key =
@@ -85,7 +96,7 @@ mkToken (EncryptionKey aes) (InitVector iv) p =
     iv'        = fromJust $ makeIV iv
     cipherText = cbcEncrypt aes iv' (pad plainText)
 
-mkToken'  :: EncryptionKey -> Principal -> IO Token
+mkToken' :: EncryptionKey -> Principal -> IO Token
 mkToken' key p = do
   iv <- generateInitVector
   pure $ mkToken key iv p
@@ -93,8 +104,7 @@ mkToken' key p = do
 readToken :: EncryptionKey -> Token -> Either String Principal
 readToken (EncryptionKey aes) (Token token) = do
   let (cipherText, iv) = B.splitAt (B.length token - ivSize) token
-  (InitVector iv') <- mkInitVector iv
   let plainText = unpad (cbcDecrypt aes (fromJust $ makeIV iv) cipherText)
   case decode (LB.fromStrict plainText) of
     Just p  -> Right p
-    Nothing -> Left "Failed to decipher token."
+    Nothing -> Left "Failed to read token. Wrong encryption key perhaps?"
