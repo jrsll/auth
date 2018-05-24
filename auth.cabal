@@ -22,6 +22,7 @@ library
                      , cryptonite
                      , aeson
                      , bytestring
+                     , base64-bytestring
   exposed-modules:     Security.Auth.Token
                      , Security.Auth.Principal
   hs-source-dirs:      src

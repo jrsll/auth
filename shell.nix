@@ -16,7 +16,8 @@ let
   drv = pkgs.haskell.lib.addBuildTool (
     hpkgs.callPackage (import ./default.nix) {}
   ) [ hpkgs.hlint
-      hpkgs.stylish-haskell ];
+      hpkgs.stylish-haskell
+      hpkgs.ghcid ];
 
 in
 

@@ -18,6 +18,7 @@ import           Crypto.Cipher.Types     (Cipher (cipherInit), IV, cbcDecrypt,
 import           Crypto.Error            (CryptoFailable, onCryptoFailure)
 import           Data.Aeson              (decode, encode)
 import qualified Data.ByteString         as B
+import qualified Data.ByteString.Base64  as B64
 import           Data.ByteString.Char8   as BC
 import           Data.ByteString.Char8   (pack, splitAt, unpack)
 import qualified Data.ByteString.Lazy    as LB
@@ -66,12 +67,12 @@ mkEncryptionKey :: B.ByteString -> Either String EncryptionKey
 mkEncryptionKey key =
   onCryptoFailure (Left . show) (Right . EncryptionKey) (cipherInit key)
 
+-- | Make an encryption key from a base64 encoded string
 mkEncryptionKey' :: String -> Either String EncryptionKey
-mkEncryptionKey' s =
-  onCryptoFailure (Left . show) (Right . EncryptionKey) cipherOrFail
-  where
-    bs           = BC.pack s
-    cipherOrFail = cipherInit bs
+mkEncryptionKey' s = do
+  let bs64 = BC.pack s
+  bs <- B64.decode bs64
+  mkEncryptionKey bs
 
 mkInitVector :: B.ByteString -> Either String InitVector
 mkInitVector bs =
@@ -86,7 +87,7 @@ generateInitVector =
 
 generateStringKey :: IO String
 generateStringKey =
-  BC.unpack <$> getEntropy keySize
+  BC.unpack . B64.encode <$> getEntropy keySize
 
 mkToken :: EncryptionKey -> InitVector -> Principal -> Token
 mkToken (EncryptionKey aes) (InitVector iv) p =
