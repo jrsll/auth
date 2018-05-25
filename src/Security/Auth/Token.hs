@@ -30,11 +30,19 @@ import           System.Entropy          (getEntropy)
 -- | Contains the encrypted data from 'Principal'.
 newtype Token = Token { tokenBytes :: B.ByteString }
 
+instance Show Token where
+  show t =
+    BC.unpack (B64.encode $ tokenBytes t)
+
 -- | Used to encrypt/decrypt tokens.
-newtype EncryptionKey = EncryptionKey { aes128 :: AES128 }
+data EncryptionKey = EncryptionKey
+  { keyBytes :: B.ByteString
+  , aes128   :: AES128 }
 
 -- | Random bytes to seed individual encryptions.
-newtype InitVector = InitVector { ivBytes :: B.ByteString }
+data InitVector = InitVector
+  { ivBytes :: B.ByteString
+  , iv128   :: IV AES128 }
 
 blockSize = 16
 ivSize    = 16
@@ -63,9 +71,13 @@ unpad bs =
     where
       pads = word8ToInt (B.last bs)
 
+mkAES128 :: B.ByteString -> Either String AES128
+mkAES128 key =
+  onCryptoFailure (Left . show) Right (cipherInit key)
+
 mkEncryptionKey :: B.ByteString -> Either String EncryptionKey
-mkEncryptionKey key =
-  onCryptoFailure (Left . show) (Right . EncryptionKey) (cipherInit key)
+mkEncryptionKey x =
+  EncryptionKey x <$> mkAES128 x
 
 -- | Make an encryption key from a base64 encoded string
 mkEncryptionKey' :: String -> Either String EncryptionKey
@@ -78,20 +90,22 @@ mkInitVector :: B.ByteString -> Either String InitVector
 mkInitVector bs =
   let maybeIV = makeIV bs :: Maybe (IV AES128)
   in case maybeIV of
-    Just _  -> Right (InitVector bs)
+    Just iv -> Right (InitVector bs iv)
     Nothing -> Left "Failed to make an IV from the given byte string."
 
 generateInitVector :: IO InitVector
-generateInitVector =
-  InitVector <$> getEntropy ivSize
+generateInitVector = do
+  bs <- getEntropy ivSize
+  let maybeIv = makeIV bs
+  pure $ InitVector bs (fromJust maybeIv)
 
 generateStringKey :: IO String
 generateStringKey =
   BC.unpack . B64.encode <$> getEntropy keySize
 
 mkToken :: EncryptionKey -> InitVector -> Principal -> Token
-mkToken (EncryptionKey aes) (InitVector iv) p =
-  Token $ B.concat [cipherText, iv]
+mkToken (EncryptionKey _ aes) (InitVector ivBs iv) p =
+  Token $ B.concat [cipherText, ivBs]
   where
     plainText  = LB.toStrict (encode p)
     iv'        = fromJust $ makeIV iv
@@ -103,7 +117,7 @@ mkToken' key p = do
   pure $ mkToken key iv p
 
 readToken :: EncryptionKey -> Token -> Either String Principal
-readToken (EncryptionKey aes) (Token token) = do
+readToken (EncryptionKey _ aes) (Token token) = do
   let (cipherText, iv) = B.splitAt (B.length token - ivSize) token
   let plainText = unpad (cbcDecrypt aes (fromJust $ makeIV iv) cipherText)
   case decode (LB.fromStrict plainText) of
